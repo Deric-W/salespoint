@@ -38,7 +38,10 @@ import org.salespointframework.catalog.Product;
 import org.salespointframework.core.Currencies;
 import org.salespointframework.inventory.InventoryEvents.QuantityReduced;
 import org.salespointframework.inventory.InventoryEvents.StockShort;
+import org.salespointframework.order.Order;
 import org.salespointframework.quantity.Quantity;
+import org.salespointframework.useraccount.UserAccountManagement;
+import org.salespointframework.useraccount.Password.UnencryptedPassword;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
@@ -58,6 +61,7 @@ class InventoryTests {
 	@Autowired UniqueInventory<UniqueInventoryItem> unique;
 	@Autowired MultiInventory<MultiInventoryItem> multiple;
 	@Autowired Catalog<Product> catalog;
+	@Autowired UserAccountManagement users;
 
 	@Autowired EntityManager em;
 	@Autowired NamedParameterJdbcOperations jdbc;
@@ -153,6 +157,55 @@ class InventoryTests {
 			item.decreaseQuantity(Quantity.of(10));
 			assertThat(unique.findItemsOutOfStock()).containsExactly(item);
 		});
+	}
+
+	@Test
+	void hasSufficientQuantity() {
+
+		var user = this.users.create("Test user", UnencryptedPassword.of("password"));
+		var order = new Order(user);
+
+		assertThat(this.unique.hasSufficientQuantity(this.cookie.getId(), Quantity.of(-4))).isTrue();
+		assertThat(this.unique.hasSufficientQuantity(order)).isTrue();
+
+		for (long amount : new long[] { -4, 0, 11, 3 }) {
+			var quantity = Quantity.of(amount);
+			order.addOrderLine(this.cookie, quantity);
+
+			assertThat(this.unique.hasSufficientQuantity(order)).isTrue();
+		}
+	}
+
+	@Test
+	void hasInsufficientQuantity() {
+
+		var user = this.users.create("Test user", UnencryptedPassword.of("password"));
+		var order = new Order(user);
+		var orderLine = order.addOrderLine(this.cookie, Quantity.of(11));
+
+		assertThat(this.unique.hasSufficientQuantity(this.cookie.getId(), Quantity.of(11))).isFalse();
+		assertThat(this.unique.hasSufficientQuantity(order)).isFalse();
+
+		order.remove(orderLine);
+
+		for (long amount : new long[] { -4, 6, 5, 4 }) {
+			order.addOrderLine(this.cookie, Quantity.of(amount));
+		}
+
+		assertThat(this.unique.hasSufficientQuantity(order)).isFalse();
+	}
+
+	@Test
+	void hasNoQuantity() {
+		var product = this.catalog.save(new Product("Test Product", Currencies.ZERO_EURO));
+		var user = this.users.create("Test user", UnencryptedPassword.of("password"));
+		var order = new Order(user);
+		order.addOrderLine(this.cookie, Quantity.of(8));
+		order.addOrderLine(product, Quantity.of(1));
+
+		assertThat(this.unique.hasSufficientQuantity(product.getId(), Quantity.of(0))).isTrue();
+		assertThat(this.unique.hasSufficientQuantity(product.getId(), Quantity.of(1))).isFalse();
+		assertThat(this.unique.hasSufficientQuantity(order)).isFalse();
 	}
 
 	@Test // #163

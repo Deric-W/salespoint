@@ -15,15 +15,19 @@
  */
 package org.salespointframework.inventory;
 
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.salespointframework.catalog.Product;
 import org.salespointframework.catalog.Product.ProductIdentifier;
 import org.salespointframework.core.SalespointRepository;
 import org.salespointframework.inventory.InventoryItem.InventoryItemIdentifier;
 import org.salespointframework.order.Order;
+import org.salespointframework.order.OrderLine;
 import org.salespointframework.quantity.Quantity;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.util.Assert;
 
 /**
  * A {@link UniqueInventory} manages {@link UniqueInventoryItem}s, i.e. only a single {@link InventoryItem} can exist
@@ -60,5 +64,45 @@ public interface UniqueInventory<T extends UniqueInventoryItem>
 	 */
 	default Optional<T> findByProduct(Product product) {
 		return findByProductIdentifier(product.getId());
+	}
+
+	/**
+	 * Returns whether the {@link UniqueInventoryItem} associated with the
+	 * {@link ProductIdentifier} is available in exactly or more of the
+	 * given {@link Quantity}.
+	 * 
+	 * @param productIdentifier must not be {@literal null}
+	 * @param quantity          must not be {@literal null}
+	 * @return
+	 */
+	default boolean hasSufficientQuantity(ProductIdentifier productIdentifier, Quantity quantity) {
+		Assert.notNull(productIdentifier, "ProductIdentifier must not be null!");
+		Assert.notNull(quantity, "Quantity must not be null!");
+
+		var item = this.findByProductIdentifier(productIdentifier);
+
+		return item.map(it -> it.hasSufficientQuantity(quantity))
+				.orElseGet(quantity::isZeroOrNegative);
+	}
+
+	/**
+	 * Returns whether the {@link UniqueInventory} contains enough stock to satisfy
+	 * the {@link OrderLine}s of the given {@link Order}.
+	 * <p>
+	 * If there are multiple {@link OrderLine}s per {@link Product} their
+	 * quantities are added together.
+	 * 
+	 * @param order must not be {@literal null}
+	 * @return
+	 */
+	default boolean hasSufficientQuantity(Order order) {
+		Map<ProductIdentifier, Quantity> quantities = order
+				.getOrderLines()
+				.stream()
+				.collect(Collectors.groupingByConcurrent(OrderLine::getProductIdentifier,
+						Collectors.reducing(Quantity.NONE, OrderLine::getQuantity, Quantity::add)));
+
+		return quantities.entrySet().stream()
+				.allMatch(entry -> this.hasSufficientQuantity(entry.getKey(), entry.getValue()));
 	}
 }
